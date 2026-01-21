@@ -236,6 +236,8 @@ struct ImGui_ImplDX7_StateBackup
     DWORD         rs_fog{}, rs_clipping{};
     IDirectDrawSurface7* tex0{};
     DWORD         tss0_colorop{}, tss0_colorarg1{}, tss0_colorarg2{}, tss0_alphaop{}, tss0_alphaarg1{}, tss0_alphaarg2{};
+    DWORD         tss0_minfilter{}, tss0_magfilter{}, tss0_mipfilter{};
+    DWORD         tss0_addressu{}, tss0_addressv{};
     DWORD         tss1_colorop{}, tss1_alphaop{};
     D3DVIEWPORT7  viewport{}; // included even though we don't change it
 
@@ -263,6 +265,11 @@ struct ImGui_ImplDX7_StateBackup
         d3d->GetTextureStageState(0, D3DTSS_ALPHAOP, &tss0_alphaop);
         d3d->GetTextureStageState(0, D3DTSS_ALPHAARG1, &tss0_alphaarg1);
         d3d->GetTextureStageState(0, D3DTSS_ALPHAARG2, &tss0_alphaarg2);
+        d3d->GetTextureStageState(0, D3DTSS_MINFILTER, &tss0_minfilter);
+        d3d->GetTextureStageState(0, D3DTSS_MAGFILTER, &tss0_magfilter);
+        d3d->GetTextureStageState(0, D3DTSS_MIPFILTER, &tss0_mipfilter);
+        d3d->GetTextureStageState(0, D3DTSS_ADDRESSU, &tss0_addressu);
+        d3d->GetTextureStageState(0, D3DTSS_ADDRESSV, &tss0_addressv);
         d3d->GetTextureStageState(1, D3DTSS_COLOROP, &tss1_colorop);
         d3d->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1_alphaop);
 
@@ -295,6 +302,11 @@ struct ImGui_ImplDX7_StateBackup
         d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, tss0_alphaop);
         d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, tss0_alphaarg1);
         d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, tss0_alphaarg2);
+        d3d->SetTextureStageState(0, D3DTSS_MINFILTER, tss0_minfilter);
+        d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, tss0_magfilter);
+        d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, tss0_mipfilter);
+        d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, tss0_addressu);
+        d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, tss0_addressv);
         d3d->SetTextureStageState(1, D3DTSS_COLOROP, tss1_colorop);
         d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1_alphaop);
 
