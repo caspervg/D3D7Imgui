@@ -1,4 +1,4 @@
-﻿// dear imgui: Renderer Backend for Direct3D7
+// dear imgui: Renderer Backend for Direct3D7
 // ===========================================
 //
 // This backend renders Dear ImGui via legacy Direct3D7 (IDirect3DDevice7 +
@@ -53,9 +53,9 @@
 
 #include <ddraw.h>
 #include <d3d.h>
-#include "imgui_internal.h"
-#include <vector>
 #include <cmath> // fabsf in intersection helper
+#include <vector>
+#include "imgui_internal.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Wold-style-cast"
@@ -116,6 +116,9 @@ struct ClippedVert {
     D3DCOLOR col;
     float    u, v;
 };
+
+static constexpr size_t IMGUI_DX7_MAX_BATCH_VERTS = 0xFFFFu;
+static constexpr size_t IMGUI_DX7_MAX_CLIPPED_VERTS_PER_TRI = 7;
 
 // Return whether a vertex is inside the half-plane of one side of the rect.
 // side: 0=left, 1=top, 2=right, 3=bottom
@@ -215,13 +218,19 @@ static void EmitClippedTri(const ClippedVert& a, const ClippedVert& b, const Cli
 
     if (n < 3) return; // fully clipped
 
+    if (out_v.size() > IMGUI_DX7_MAX_BATCH_VERTS - (size_t)n)
+    {
+        IMGUI_DEBUG_LOG("[dx7] Skipping clipped triangle because the temporary vertex batch would overflow 16-bit indices.\n");
+        return;
+    }
+
     // Triangulate clipped polygon as a fan: (0, i, i+1)
     WORD base = (WORD)out_v.size();
     for (int i = 0; i < n; ++i) out_v.push_back(poly[i]);
     for (int i = 1; i < n - 1; ++i) {
         out_i.push_back(base);
-        out_i.push_back(base + i);
-        out_i.push_back(base + i + 1);
+        out_i.push_back((WORD)(base + i));
+        out_i.push_back((WORD)(base + i + 1));
     }
 }
 
@@ -236,6 +245,8 @@ struct ImGui_ImplDX7_StateBackup
     DWORD         rs_fog{}, rs_clipping{};
     IDirectDrawSurface7* tex0{};
     DWORD         tss0_colorop{}, tss0_colorarg1{}, tss0_colorarg2{}, tss0_alphaop{}, tss0_alphaarg1{}, tss0_alphaarg2{};
+    DWORD         tss0_minfilter{}, tss0_magfilter{}, tss0_mipfilter{};
+    DWORD         tss0_addressu{}, tss0_addressv{};
     DWORD         tss1_colorop{}, tss1_alphaop{};
     D3DVIEWPORT7  viewport{}; // included even though we don't change it
 
@@ -263,6 +274,11 @@ struct ImGui_ImplDX7_StateBackup
         d3d->GetTextureStageState(0, D3DTSS_ALPHAOP, &tss0_alphaop);
         d3d->GetTextureStageState(0, D3DTSS_ALPHAARG1, &tss0_alphaarg1);
         d3d->GetTextureStageState(0, D3DTSS_ALPHAARG2, &tss0_alphaarg2);
+        d3d->GetTextureStageState(0, D3DTSS_MINFILTER, &tss0_minfilter);
+        d3d->GetTextureStageState(0, D3DTSS_MAGFILTER, &tss0_magfilter);
+        d3d->GetTextureStageState(0, D3DTSS_MIPFILTER, &tss0_mipfilter);
+        d3d->GetTextureStageState(0, D3DTSS_ADDRESSU, &tss0_addressu);
+        d3d->GetTextureStageState(0, D3DTSS_ADDRESSV, &tss0_addressv);
         d3d->GetTextureStageState(1, D3DTSS_COLOROP, &tss1_colorop);
         d3d->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1_alphaop);
 
@@ -295,6 +311,11 @@ struct ImGui_ImplDX7_StateBackup
         d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, tss0_alphaop);
         d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, tss0_alphaarg1);
         d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, tss0_alphaarg2);
+        d3d->SetTextureStageState(0, D3DTSS_MINFILTER, tss0_minfilter);
+        d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, tss0_magfilter);
+        d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, tss0_mipfilter);
+        d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, tss0_addressu);
+        d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, tss0_addressv);
         d3d->SetTextureStageState(1, D3DTSS_COLOROP, tss1_colorop);
         d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1_alphaop);
 
@@ -363,6 +384,19 @@ static inline ImU32 ImGui_ImplDX7_RgbaToBgra(ImU32 rgba)
 // Font texture (ImGui atlas) upload to DirectDraw7 texture surface
 //------------------------------------------------------------------------------
 static IDirectDrawSurface7* g_FontTexture = nullptr;
+
+static void ImGui_ImplDX7_SubmitClippedBatch(IDirect3DDevice7* d3d, std::vector<ClippedVert>& cv, std::vector<WORD>& ci)
+{
+    if (cv.empty() || ci.empty())
+        return;
+
+    d3d->DrawIndexedPrimitive(
+        D3DPT_TRIANGLELIST,
+        IMGUI_DX7_FVF,
+        cv.data(), (DWORD)cv.size(),
+        ci.data(), (DWORD)ci.size(),
+        0);
+}
 
 static bool ImGui_ImplDX7_CreateFontsTexture()
 {
@@ -488,6 +522,9 @@ void ImGui_ImplDX7_NewFrame()
     ImGui_ImplDX7_Data* bd = ImGui_ImplDX7_GetBackendData();
     IM_ASSERT(bd != nullptr && "Context or backend not initialized! Did you call ImGui_ImplDX7_Init()?");
     IM_UNUSED(bd);
+
+    if (g_FontTexture == nullptr)
+        ImGui_ImplDX7_CreateFontsTexture();
 }
 
 //------------------------------------------------------------------------------
@@ -502,6 +539,8 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
     IM_ASSERT(sizeof(ImDrawIdx) == 2 && "D3D7 backend requires 16-bit ImDrawIdx!");
 
     ImGui_ImplDX7_Data* bd = ImGui_ImplDX7_GetBackendData();
+    if (bd == nullptr || bd->d3d == nullptr)
+        return;
     IDirect3DDevice7* d3d = bd->d3d;
 
     // Backup application state (we touch a subset).
@@ -602,6 +641,42 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
             if (cr_max.x > (float)fb_width)  cr_max.x = (float)fb_width;
             if (cr_max.y > (float)fb_height) cr_max.y = (float)fb_height;
 
+            const size_t cmd_idx_offset = (size_t)pcmd->IdxOffset;
+            const size_t cmd_vtx_offset = (size_t)pcmd->VtxOffset;
+            const size_t cmd_elem_count = (size_t)pcmd->ElemCount;
+            const size_t draw_list_idx_count = (size_t)dl->IdxBuffer.Size;
+            const size_t draw_list_vtx_count = (size_t)dl->VtxBuffer.Size;
+
+            if ((pcmd->ElemCount % 3) != 0)
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: ElemCount %u is not divisible by 3.\n", cmd_i, n, pcmd->ElemCount);
+                continue;
+            }
+            if (cmd_idx_offset > draw_list_idx_count || cmd_elem_count > draw_list_idx_count - cmd_idx_offset)
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: IdxOffset=%u ElemCount=%u exceed IdxBuffer.Size=%d.\n",
+                    cmd_i, n, pcmd->IdxOffset, pcmd->ElemCount, dl->IdxBuffer.Size);
+                continue;
+            }
+            if (cmd_vtx_offset > draw_list_vtx_count)
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: VtxOffset=%u exceeds VtxBuffer.Size=%d.\n",
+                    cmd_i, n, pcmd->VtxOffset, dl->VtxBuffer.Size);
+                continue;
+            }
+            if ((size_t)global_vtx_offset + cmd_vtx_offset > (size_t)total_vtx || (size_t)global_idx_offset + cmd_idx_offset > (size_t)total_idx)
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: flattened buffer offsets are out of range.\n", cmd_i, n);
+                continue;
+            }
+
+            const size_t cmd_vtx_count = draw_list_vtx_count - cmd_vtx_offset;
+            if (cmd_elem_count != 0 && cmd_vtx_count == 0)
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: ElemCount=%u with no available vertices.\n", cmd_i, n, pcmd->ElemCount);
+                continue;
+            }
+
             // Bind the texture for this draw.
             d3d->SetTexture(0, (IDirectDrawSurface7*)pcmd->GetTexID());
 
@@ -624,24 +699,38 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
                 };
 
             // Process triangles in this command, clip each, and push to cv/ci.
+            bool skip_cmd = false;
             for (unsigned t = 0; t < pcmd->ElemCount; t += 3)
             {
-                const IMGUI_DX7_CUSTOMVERTEX& A = vstart[istart[t + 0]];
-                const IMGUI_DX7_CUSTOMVERTEX& B = vstart[istart[t + 1]];
-                const IMGUI_DX7_CUSTOMVERTEX& C = vstart[istart[t + 2]];
+                if (cv.size() > IMGUI_DX7_MAX_BATCH_VERTS - IMGUI_DX7_MAX_CLIPPED_VERTS_PER_TRI)
+                {
+                    ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci);
+                    cv.clear();
+                    ci.clear();
+                }
+
+                const ImDrawIdx idx0 = istart[t + 0];
+                const ImDrawIdx idx1 = istart[t + 1];
+                const ImDrawIdx idx2 = istart[t + 2];
+                if ((size_t)idx0 >= cmd_vtx_count || (size_t)idx1 >= cmd_vtx_count || (size_t)idx2 >= cmd_vtx_count)
+                {
+                    IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: triangle indices [%u,%u,%u] exceed command-local vertex span %d.\n",
+                        cmd_i, n, (unsigned)idx0, (unsigned)idx1, (unsigned)idx2, (int)cmd_vtx_count);
+                    skip_cmd = true;
+                    break;
+                }
+
+                const IMGUI_DX7_CUSTOMVERTEX& A = vstart[idx0];
+                const IMGUI_DX7_CUSTOMVERTEX& B = vstart[idx1];
+                const IMGUI_DX7_CUSTOMVERTEX& C = vstart[idx2];
                 EmitClippedTri(toCV(A), toCV(B), toCV(C), R, cv, ci);
             }
 
+            if (skip_cmd)
+                continue;
+
             // Submit clipped triangles (if any).
-            if (!ci.empty())
-            {
-                d3d->DrawIndexedPrimitive(
-                    D3DPT_TRIANGLELIST,
-                    IMGUI_DX7_FVF,
-                    cv.data(), (DWORD)cv.size(),
-                    ci.data(), (DWORD)ci.size(),
-                    0);
-            }
+            ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci);
         }
 
         // Advance the global offsets to next draw list.
