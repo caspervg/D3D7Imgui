@@ -240,6 +240,39 @@ static void EmitClippedTri(const ClippedVert& a, const ClippedVert& b, const Cli
 //------------------------------------------------------------------------------
 struct ImGui_ImplDX7_StateBackup
 {
+    enum CaptureFlag : uint64_t
+    {
+        Capture_World = 1ull << 0,
+        Capture_View = 1ull << 1,
+        Capture_Proj = 1ull << 2,
+        Capture_RSAlphaBlend = 1ull << 3,
+        Capture_RSSrcBlend = 1ull << 4,
+        Capture_RSDstBlend = 1ull << 5,
+        Capture_RSZEnable = 1ull << 6,
+        Capture_RSZWrite = 1ull << 7,
+        Capture_RSCullMode = 1ull << 8,
+        Capture_RSLighting = 1ull << 9,
+        Capture_RSShade = 1ull << 10,
+        Capture_RSFog = 1ull << 11,
+        Capture_RSClipping = 1ull << 12,
+        Capture_Tex0 = 1ull << 13,
+        Capture_TSS0ColorOp = 1ull << 14,
+        Capture_TSS0ColorArg1 = 1ull << 15,
+        Capture_TSS0ColorArg2 = 1ull << 16,
+        Capture_TSS0AlphaOp = 1ull << 17,
+        Capture_TSS0AlphaArg1 = 1ull << 18,
+        Capture_TSS0AlphaArg2 = 1ull << 19,
+        Capture_TSS0MinFilter = 1ull << 20,
+        Capture_TSS0MagFilter = 1ull << 21,
+        Capture_TSS0MipFilter = 1ull << 22,
+        Capture_TSS0AddressU = 1ull << 23,
+        Capture_TSS0AddressV = 1ull << 24,
+        Capture_TSS1ColorOp = 1ull << 25,
+        Capture_TSS1AlphaOp = 1ull << 26,
+        Capture_Viewport = 1ull << 27,
+    };
+
+    uint64_t      captured_flags{};
     D3DMATRIX     world{}, view{}, proj{};
     DWORD         rs_alpha_blend{}, rs_src_blend{}, rs_dst_blend{}, rs_zenable{}, rs_zwrite{}, rs_cullmode{}, rs_lighting{}, rs_shade{};
     DWORD         rs_fog{}, rs_clipping{};
@@ -250,114 +283,129 @@ struct ImGui_ImplDX7_StateBackup
     DWORD         tss1_colorop{}, tss1_alphaop{};
     D3DVIEWPORT7  viewport{}; // included even though we don't change it
 
+    ~ImGui_ImplDX7_StateBackup()
+    {
+        if (tex0)
+        {
+            tex0->Release();
+            tex0 = nullptr;
+        }
+    }
+
     void Capture(IDirect3DDevice7* d3d)
     {
-        d3d->GetTransform(D3DTRANSFORMSTATE_WORLD, &world);
-        d3d->GetTransform(D3DTRANSFORMSTATE_VIEW, &view);
-        d3d->GetTransform(D3DTRANSFORMSTATE_PROJECTION, &proj);
+        if (SUCCEEDED(d3d->GetTransform(D3DTRANSFORMSTATE_WORLD, &world))) captured_flags |= Capture_World;
+        if (SUCCEEDED(d3d->GetTransform(D3DTRANSFORMSTATE_VIEW, &view))) captured_flags |= Capture_View;
+        if (SUCCEEDED(d3d->GetTransform(D3DTRANSFORMSTATE_PROJECTION, &proj))) captured_flags |= Capture_Proj;
 
-        d3d->GetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, &rs_alpha_blend);
-        d3d->GetRenderState(D3DRENDERSTATE_SRCBLEND, &rs_src_blend);
-        d3d->GetRenderState(D3DRENDERSTATE_DESTBLEND, &rs_dst_blend);
-        d3d->GetRenderState(D3DRENDERSTATE_ZENABLE, &rs_zenable);
-        d3d->GetRenderState(D3DRENDERSTATE_ZWRITEENABLE, &rs_zwrite);
-        d3d->GetRenderState(D3DRENDERSTATE_CULLMODE, &rs_cullmode);
-        d3d->GetRenderState(D3DRENDERSTATE_LIGHTING, &rs_lighting);
-        d3d->GetRenderState(D3DRENDERSTATE_SHADEMODE, &rs_shade);
-        d3d->GetRenderState(D3DRENDERSTATE_FOGENABLE, &rs_fog);
-        d3d->GetRenderState(D3DRENDERSTATE_CLIPPING, &rs_clipping);
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, &rs_alpha_blend))) captured_flags |= Capture_RSAlphaBlend;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_SRCBLEND, &rs_src_blend))) captured_flags |= Capture_RSSrcBlend;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_DESTBLEND, &rs_dst_blend))) captured_flags |= Capture_RSDstBlend;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_ZENABLE, &rs_zenable))) captured_flags |= Capture_RSZEnable;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_ZWRITEENABLE, &rs_zwrite))) captured_flags |= Capture_RSZWrite;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_CULLMODE, &rs_cullmode))) captured_flags |= Capture_RSCullMode;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_LIGHTING, &rs_lighting))) captured_flags |= Capture_RSLighting;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_SHADEMODE, &rs_shade))) captured_flags |= Capture_RSShade;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_FOGENABLE, &rs_fog))) captured_flags |= Capture_RSFog;
+        if (SUCCEEDED(d3d->GetRenderState(D3DRENDERSTATE_CLIPPING, &rs_clipping))) captured_flags |= Capture_RSClipping;
 
-        d3d->GetTexture(0, &tex0); // AddRef()'d; must Release() later
-        d3d->GetTextureStageState(0, D3DTSS_COLOROP, &tss0_colorop);
-        d3d->GetTextureStageState(0, D3DTSS_COLORARG1, &tss0_colorarg1);
-        d3d->GetTextureStageState(0, D3DTSS_COLORARG2, &tss0_colorarg2);
-        d3d->GetTextureStageState(0, D3DTSS_ALPHAOP, &tss0_alphaop);
-        d3d->GetTextureStageState(0, D3DTSS_ALPHAARG1, &tss0_alphaarg1);
-        d3d->GetTextureStageState(0, D3DTSS_ALPHAARG2, &tss0_alphaarg2);
-        d3d->GetTextureStageState(0, D3DTSS_MINFILTER, &tss0_minfilter);
-        d3d->GetTextureStageState(0, D3DTSS_MAGFILTER, &tss0_magfilter);
-        d3d->GetTextureStageState(0, D3DTSS_MIPFILTER, &tss0_mipfilter);
-        d3d->GetTextureStageState(0, D3DTSS_ADDRESSU, &tss0_addressu);
-        d3d->GetTextureStageState(0, D3DTSS_ADDRESSV, &tss0_addressv);
-        d3d->GetTextureStageState(1, D3DTSS_COLOROP, &tss1_colorop);
-        d3d->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1_alphaop);
+        if (SUCCEEDED(d3d->GetTexture(0, &tex0))) captured_flags |= Capture_Tex0; // AddRef()'d; released later.
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_COLOROP, &tss0_colorop))) captured_flags |= Capture_TSS0ColorOp;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_COLORARG1, &tss0_colorarg1))) captured_flags |= Capture_TSS0ColorArg1;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_COLORARG2, &tss0_colorarg2))) captured_flags |= Capture_TSS0ColorArg2;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_ALPHAOP, &tss0_alphaop))) captured_flags |= Capture_TSS0AlphaOp;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_ALPHAARG1, &tss0_alphaarg1))) captured_flags |= Capture_TSS0AlphaArg1;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_ALPHAARG2, &tss0_alphaarg2))) captured_flags |= Capture_TSS0AlphaArg2;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_MINFILTER, &tss0_minfilter))) captured_flags |= Capture_TSS0MinFilter;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_MAGFILTER, &tss0_magfilter))) captured_flags |= Capture_TSS0MagFilter;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_MIPFILTER, &tss0_mipfilter))) captured_flags |= Capture_TSS0MipFilter;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_ADDRESSU, &tss0_addressu))) captured_flags |= Capture_TSS0AddressU;
+        if (SUCCEEDED(d3d->GetTextureStageState(0, D3DTSS_ADDRESSV, &tss0_addressv))) captured_flags |= Capture_TSS0AddressV;
+        if (SUCCEEDED(d3d->GetTextureStageState(1, D3DTSS_COLOROP, &tss1_colorop))) captured_flags |= Capture_TSS1ColorOp;
+        if (SUCCEEDED(d3d->GetTextureStageState(1, D3DTSS_ALPHAOP, &tss1_alphaop))) captured_flags |= Capture_TSS1AlphaOp;
 
-        d3d->GetViewport(&viewport);
+        if (SUCCEEDED(d3d->GetViewport(&viewport))) captured_flags |= Capture_Viewport;
     }
 
     void Restore(IDirect3DDevice7* d3d)
     {
-        d3d->SetTransform(D3DTRANSFORMSTATE_WORLD, &world);
-        d3d->SetTransform(D3DTRANSFORMSTATE_VIEW, &view);
-        d3d->SetTransform(D3DTRANSFORMSTATE_PROJECTION, &proj);
+        if (captured_flags & Capture_World) d3d->SetTransform(D3DTRANSFORMSTATE_WORLD, &world);
+        if (captured_flags & Capture_View) d3d->SetTransform(D3DTRANSFORMSTATE_VIEW, &view);
+        if (captured_flags & Capture_Proj) d3d->SetTransform(D3DTRANSFORMSTATE_PROJECTION, &proj);
 
-        d3d->SetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, rs_alpha_blend);
-        d3d->SetRenderState(D3DRENDERSTATE_SRCBLEND, rs_src_blend);
-        d3d->SetRenderState(D3DRENDERSTATE_DESTBLEND, rs_dst_blend);
-        d3d->SetRenderState(D3DRENDERSTATE_ZENABLE, rs_zenable);
-        d3d->SetRenderState(D3DRENDERSTATE_ZWRITEENABLE, rs_zwrite);
-        d3d->SetRenderState(D3DRENDERSTATE_CULLMODE, rs_cullmode);
-        d3d->SetRenderState(D3DRENDERSTATE_LIGHTING, rs_lighting);
-        d3d->SetRenderState(D3DRENDERSTATE_SHADEMODE, rs_shade);
-        d3d->SetRenderState(D3DRENDERSTATE_FOGENABLE, rs_fog);
-        d3d->SetRenderState(D3DRENDERSTATE_CLIPPING, rs_clipping);
+        if (captured_flags & Capture_RSAlphaBlend) d3d->SetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, rs_alpha_blend);
+        if (captured_flags & Capture_RSSrcBlend) d3d->SetRenderState(D3DRENDERSTATE_SRCBLEND, rs_src_blend);
+        if (captured_flags & Capture_RSDstBlend) d3d->SetRenderState(D3DRENDERSTATE_DESTBLEND, rs_dst_blend);
+        if (captured_flags & Capture_RSZEnable) d3d->SetRenderState(D3DRENDERSTATE_ZENABLE, rs_zenable);
+        if (captured_flags & Capture_RSZWrite) d3d->SetRenderState(D3DRENDERSTATE_ZWRITEENABLE, rs_zwrite);
+        if (captured_flags & Capture_RSCullMode) d3d->SetRenderState(D3DRENDERSTATE_CULLMODE, rs_cullmode);
+        if (captured_flags & Capture_RSLighting) d3d->SetRenderState(D3DRENDERSTATE_LIGHTING, rs_lighting);
+        if (captured_flags & Capture_RSShade) d3d->SetRenderState(D3DRENDERSTATE_SHADEMODE, rs_shade);
+        if (captured_flags & Capture_RSFog) d3d->SetRenderState(D3DRENDERSTATE_FOGENABLE, rs_fog);
+        if (captured_flags & Capture_RSClipping) d3d->SetRenderState(D3DRENDERSTATE_CLIPPING, rs_clipping);
 
-        d3d->SetTexture(0, tex0);
-        if (tex0) tex0->Release();
+        if (captured_flags & Capture_Tex0) d3d->SetTexture(0, tex0);
+        if (tex0)
+        {
+            tex0->Release();
+            tex0 = nullptr;
+        }
 
-        d3d->SetTextureStageState(0, D3DTSS_COLOROP, tss0_colorop);
-        d3d->SetTextureStageState(0, D3DTSS_COLORARG1, tss0_colorarg1);
-        d3d->SetTextureStageState(0, D3DTSS_COLORARG2, tss0_colorarg2);
-        d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, tss0_alphaop);
-        d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, tss0_alphaarg1);
-        d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, tss0_alphaarg2);
-        d3d->SetTextureStageState(0, D3DTSS_MINFILTER, tss0_minfilter);
-        d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, tss0_magfilter);
-        d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, tss0_mipfilter);
-        d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, tss0_addressu);
-        d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, tss0_addressv);
-        d3d->SetTextureStageState(1, D3DTSS_COLOROP, tss1_colorop);
-        d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1_alphaop);
+        if (captured_flags & Capture_TSS0ColorOp) d3d->SetTextureStageState(0, D3DTSS_COLOROP, tss0_colorop);
+        if (captured_flags & Capture_TSS0ColorArg1) d3d->SetTextureStageState(0, D3DTSS_COLORARG1, tss0_colorarg1);
+        if (captured_flags & Capture_TSS0ColorArg2) d3d->SetTextureStageState(0, D3DTSS_COLORARG2, tss0_colorarg2);
+        if (captured_flags & Capture_TSS0AlphaOp) d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, tss0_alphaop);
+        if (captured_flags & Capture_TSS0AlphaArg1) d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, tss0_alphaarg1);
+        if (captured_flags & Capture_TSS0AlphaArg2) d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, tss0_alphaarg2);
+        if (captured_flags & Capture_TSS0MinFilter) d3d->SetTextureStageState(0, D3DTSS_MINFILTER, tss0_minfilter);
+        if (captured_flags & Capture_TSS0MagFilter) d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, tss0_magfilter);
+        if (captured_flags & Capture_TSS0MipFilter) d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, tss0_mipfilter);
+        if (captured_flags & Capture_TSS0AddressU) d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, tss0_addressu);
+        if (captured_flags & Capture_TSS0AddressV) d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, tss0_addressv);
+        if (captured_flags & Capture_TSS1ColorOp) d3d->SetTextureStageState(1, D3DTSS_COLOROP, tss1_colorop);
+        if (captured_flags & Capture_TSS1AlphaOp) d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, tss1_alphaop);
 
-        d3d->SetViewport(&viewport);
+        if ((captured_flags & Capture_Viewport) && viewport.dwWidth != 0 && viewport.dwHeight != 0)
+            d3d->SetViewport(&viewport);
     }
 };
 
 //------------------------------------------------------------------------------
 // Common render state setup for ImGui rendering
 //------------------------------------------------------------------------------
-static void ImGui_ImplDX7_SetupRenderState(ImDrawData* /*draw_data*/)
+static bool ImGui_ImplDX7_SetupRenderState(ImDrawData* /*draw_data*/)
 {
     ImGui_ImplDX7_Data* bd = ImGui_ImplDX7_GetBackendData();
     IDirect3DDevice7* d3d = bd->d3d;
+    bool ok = true;
 
     // Disable depth and lighting; enable alpha blending.
-    d3d->SetRenderState(D3DRENDERSTATE_ZENABLE, FALSE);
-    d3d->SetRenderState(D3DRENDERSTATE_ZWRITEENABLE, FALSE);
-    d3d->SetRenderState(D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
-    d3d->SetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
-    d3d->SetRenderState(D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA);
-    d3d->SetRenderState(D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
-    d3d->SetRenderState(D3DRENDERSTATE_LIGHTING, FALSE);
-    d3d->SetRenderState(D3DRENDERSTATE_SHADEMODE, D3DSHADE_GOURAUD);
-    d3d->SetRenderState(D3DRENDERSTATE_FOGENABLE, FALSE);
-    d3d->SetRenderState(D3DRENDERSTATE_CLIPPING, TRUE);
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_ZENABLE, FALSE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_ZWRITEENABLE, FALSE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_CULLMODE, D3DCULL_NONE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_ALPHABLENDENABLE, TRUE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_LIGHTING, FALSE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_SHADEMODE, D3DSHADE_GOURAUD));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_FOGENABLE, FALSE));
+    ok &= SUCCEEDED(d3d->SetRenderState(D3DRENDERSTATE_CLIPPING, TRUE));
 
     // Texture pipeline config: modulate texture * vertex color, clamp addressing.
-    d3d->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-    d3d->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-    d3d->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-    d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-    d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-    d3d->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-    d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE));
 
-    d3d->SetTextureStageState(0, D3DTSS_MINFILTER, D3DTFN_LINEAR);
-    d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
-    d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, D3DTFP_POINT);
-    d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
-    d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_MINFILTER, D3DTFN_LINEAR));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTFG_LINEAR));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_MIPFILTER, D3DTFP_POINT));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP));
+    ok &= SUCCEEDED(d3d->SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP));
 
     // Identity transforms (we submit XYZRHW so matrices are not used).
     D3DMATRIX I;
@@ -365,9 +413,11 @@ static void ImGui_ImplDX7_SetupRenderState(ImDrawData* /*draw_data*/)
     I._21 = 0.0f;  I._22 = 1.0f;  I._23 = 0.0f;  I._24 = 0.0f;
     I._31 = 0.0f;  I._32 = 0.0f;  I._33 = 1.0f;  I._34 = 0.0f;
     I._41 = 0.0f;  I._42 = 0.0f;  I._43 = 0.0f;  I._44 = 1.0f;
-    d3d->SetTransform(D3DTRANSFORMSTATE_WORLD, &I);
-    d3d->SetTransform(D3DTRANSFORMSTATE_VIEW, &I);
-    d3d->SetTransform(D3DTRANSFORMSTATE_PROJECTION, &I);
+    ok &= SUCCEEDED(d3d->SetTransform(D3DTRANSFORMSTATE_WORLD, &I));
+    ok &= SUCCEEDED(d3d->SetTransform(D3DTRANSFORMSTATE_VIEW, &I));
+    ok &= SUCCEEDED(d3d->SetTransform(D3DTRANSFORMSTATE_PROJECTION, &I));
+
+    return ok;
 }
 
 // Convert RGBA32 -> BGRA32 if needed when uploading the font atlas.
@@ -385,12 +435,17 @@ static inline ImU32 ImGui_ImplDX7_RgbaToBgra(ImU32 rgba)
 //------------------------------------------------------------------------------
 static IDirectDrawSurface7* g_FontTexture = nullptr;
 
-static void ImGui_ImplDX7_SubmitClippedBatch(IDirect3DDevice7* d3d, std::vector<ClippedVert>& cv, std::vector<WORD>& ci)
+static bool ImGui_ImplDX7_IsSurfaceAvailable(IDirectDrawSurface7* surface)
+{
+    return !surface || surface->IsLost() == DD_OK;
+}
+
+static HRESULT ImGui_ImplDX7_SubmitClippedBatch(IDirect3DDevice7* d3d, std::vector<ClippedVert>& cv, std::vector<WORD>& ci)
 {
     if (cv.empty() || ci.empty())
-        return;
+        return DD_OK;
 
-    d3d->DrawIndexedPrimitive(
+    return d3d->DrawIndexedPrimitive(
         D3DPT_TRIANGLELIST,
         IMGUI_DX7_FVF,
         cv.data(), (DWORD)cv.size(),
@@ -468,6 +523,17 @@ static void ImGui_ImplDX7_DestroyFontsTexture()
     if (g_FontTexture) { g_FontTexture->Release(); g_FontTexture = nullptr; }
 }
 
+static bool ImGui_ImplDX7_RefreshFontsTexture()
+{
+    if (g_FontTexture && !ImGui_ImplDX7_IsSurfaceAvailable(g_FontTexture))
+        ImGui_ImplDX7_DestroyFontsTexture();
+
+    if (!g_FontTexture)
+        return ImGui_ImplDX7_CreateFontsTexture();
+
+    return true;
+}
+
 //------------------------------------------------------------------------------
 // Public API
 //------------------------------------------------------------------------------
@@ -506,6 +572,36 @@ void ImGui_ImplDX7_Shutdown()
     IM_DELETE(bd);
 }
 
+bool ImGui_ImplDX7_UpdateDevice(IDirect3DDevice7* device, IDirectDraw7* ddraw)
+{
+    ImGui_ImplDX7_Data* bd = ImGui_ImplDX7_GetBackendData();
+    if (bd == nullptr)
+        return false;
+
+    bool changed = false;
+
+    if (bd->d3d != device)
+    {
+        if (bd->d3d) bd->d3d->Release();
+        bd->d3d = device;
+        if (bd->d3d) bd->d3d->AddRef();
+        changed = true;
+    }
+
+    if (bd->ddraw != ddraw)
+    {
+        if (bd->ddraw) bd->ddraw->Release();
+        bd->ddraw = ddraw;
+        if (bd->ddraw) bd->ddraw->AddRef();
+        changed = true;
+    }
+
+    if (changed)
+        ImGui_ImplDX7_InvalidateDeviceObjects();
+
+    return true;
+}
+
 bool ImGui_ImplDX7_CreateDeviceObjects()
 {
     // Currently we only need to upload the font texture.
@@ -523,8 +619,7 @@ void ImGui_ImplDX7_NewFrame()
     IM_ASSERT(bd != nullptr && "Context or backend not initialized! Did you call ImGui_ImplDX7_Init()?");
     IM_UNUSED(bd);
 
-    if (g_FontTexture == nullptr)
-        ImGui_ImplDX7_CreateFontsTexture();
+    ImGui_ImplDX7_RefreshFontsTexture();
 }
 
 //------------------------------------------------------------------------------
@@ -543,12 +638,16 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
         return;
     IDirect3DDevice7* d3d = bd->d3d;
 
+    if (!ImGui_ImplDX7_RefreshFontsTexture())
+        return;
+
     // Backup application state (we touch a subset).
     ImGui_ImplDX7_StateBackup backup{};
     backup.Capture(d3d);
 
     // Set render state appropriate for UI.
-    ImGui_ImplDX7_SetupRenderState(draw_data);
+    if (!ImGui_ImplDX7_SetupRenderState(draw_data))
+        return;
 
     // Build CPU-side contiguous vertex & index buffers for the whole frame.
     const int total_vtx = draw_data->TotalVtxCount;
@@ -598,6 +697,7 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
     const int fb_height = (int)(draw_data->DisplaySize.y * clip_scale.y);
 
     // Iterate draw commands and render them.
+    bool render_failed = false;
     for (int n = 0; n < draw_data->CmdListsCount; n++)
     {
         const ImDrawList* dl = draw_data->CmdLists[n];
@@ -611,14 +711,27 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
             {
                 if (pcmd->UserCallback == ImDrawCallback_ResetRenderState)
                 {
-                    ImGui_ImplDX7_SetupRenderState(draw_data);
+                    if (!ImGui_ImplDX7_SetupRenderState(draw_data))
+                    {
+                        render_failed = true;
+                        break;
+                    }
                 }
                 else
                 {
                     pcmd->UserCallback(dl, pcmd);
                     // Reset common state after callback so the next draw is stable.
-                    ImGui_ImplDX7_SetupRenderState(draw_data);
-                    d3d->SetViewport(&backup.viewport);
+                    if (!ImGui_ImplDX7_SetupRenderState(draw_data))
+                    {
+                        render_failed = true;
+                        break;
+                    }
+                    if ((backup.captured_flags & ImGui_ImplDX7_StateBackup::Capture_Viewport) &&
+                        backup.viewport.dwWidth != 0 &&
+                        backup.viewport.dwHeight != 0)
+                    {
+                        d3d->SetViewport(&backup.viewport);
+                    }
                 }
                 continue;
             }
@@ -678,7 +791,17 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
             }
 
             // Bind the texture for this draw.
-            d3d->SetTexture(0, (IDirectDrawSurface7*)pcmd->GetTexID());
+            IDirectDrawSurface7* texture = (IDirectDrawSurface7*)pcmd->GetTexID();
+            if (!ImGui_ImplDX7_IsSurfaceAvailable(texture))
+            {
+                IMGUI_DEBUG_LOG("[dx7] Skipping draw cmd %d in list %d: texture surface is lost.\n", cmd_i, n);
+                continue;
+            }
+            if (FAILED(d3d->SetTexture(0, texture)))
+            {
+                render_failed = true;
+                break;
+            }
 
             // Compute start pointers into the big buffers for this cmd.
             const IMGUI_DX7_CUSTOMVERTEX* vstart = vbuf.Data + (pcmd->VtxOffset + global_vtx_offset);
@@ -704,7 +827,11 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
             {
                 if (cv.size() > IMGUI_DX7_MAX_BATCH_VERTS - IMGUI_DX7_MAX_CLIPPED_VERTS_PER_TRI)
                 {
-                    ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci);
+                    if (FAILED(ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci)))
+                    {
+                        render_failed = true;
+                        break;
+                    }
                     cv.clear();
                     ci.clear();
                 }
@@ -730,8 +857,15 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
                 continue;
 
             // Submit clipped triangles (if any).
-            ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci);
+            if (FAILED(ImGui_ImplDX7_SubmitClippedBatch(d3d, cv, ci)))
+            {
+                render_failed = true;
+                break;
+            }
         }
+
+        if (render_failed)
+            break;
 
         // Advance the global offsets to next draw list.
         global_idx_offset += dl->IdxBuffer.Size;
@@ -739,7 +873,8 @@ void ImGui_ImplDX7_RenderDrawData(ImDrawData* draw_data)
     }
 
     // Restore application state.
-    backup.Restore(d3d);
+    if (!render_failed)
+        backup.Restore(d3d);
 }
 
 #endif // IMGUI_DISABLE
